@@ -2,8 +2,10 @@
 Build a scene graph from the segment-based map and captions from LLaVA.
 """
 
+import base64
 import gc
 import gzip
+import io
 import json
 import os
 import pickle as pkl
@@ -30,14 +32,7 @@ from scipy.sparse.csgraph import connected_components, minimum_spanning_tree
 from tqdm import tqdm, trange
 from transformers import logging as hf_logging
 
-# from mappingutils import (
-#     MapObjectList,
-#     compute_3d_giou_accuracte_batch,
-#     compute_3d_iou_accuracte_batch,
-#     compute_iou_batch,
-#     compute_overlap_matrix_faiss,
-#     num_points_closer_than_threshold_batch,
-# )
+from conceptgraph.slam.slam_classes import MapObjectList
 
 torch.autograd.set_grad_enabled(False)
 hf_logging.set_verbosity_error()
@@ -53,6 +48,7 @@ class ProgramArgs:
     mode: Literal[
         "extract-node-captions",
         "refine-node-captions",
+        "extract-node-captions-gpt",
         "build-scenegraph",
         "generate-scenegraph-json",
         "annotate-scenegraph",
@@ -240,12 +236,140 @@ def plot_images_with_captions(images, captions, confidences, low_confidences, ma
     plt.close()
 
 
+# TODO: Refactor this
+def encode_numpy_image_to_base64(image: np.ndarray | Image.Image) -> str:
+    """
+    Encodes a numpy array (HxWx3, dtype uint8) representing an image into a base64 string.
+    
+    Args:
+    image (np.ndarray): A PIL Image or a HxWx3 numpy array with dtype uint8, representing an RGB image.
+
+    Returns:
+    str: The base64 encoded string of the image.
+    """
+    if isinstance(image, np.ndarray):
+        if not (isinstance(image, np.ndarray) and image.ndim == 3 and image.shape[2] == 3 and image.dtype == np.uint8):
+            raise ValueError("Input must be a HxWx3 numpy array with dtype uint8.")
+        image = Image.fromarray(image)
+    else:
+        assert isinstance(image, Image.Image), "Input must be a PIL Image or a numpy array."
+    
+    # Save the PIL Image to a bytes buffer
+    img_buffer = io.BytesIO()
+    image.save(img_buffer, format='JPEG')  # Can use PNG or other formats depending on the requirement
+    
+    # Get bytes data from the buffer and encode it in base64
+    byte_data = img_buffer.getvalue()
+    base64_str = base64.b64encode(byte_data).decode('utf-8')
+    
+    return base64_str
+
+def caption_object_gpt4o(images: list[np.ndarray] | list[Image.Image]):
+    system_prompt = """You are an agent specialized in recognizing and describing objects from multi-view images. You are given a list of images of a single object, which are possibly captured at different views. You will return a JSON dictionary containing the following fields, where a "tag" is a concise category name of the object. 
+ 
+    {
+        "summary": "<a brief description of the object captured by the images>", 
+        "possible_tags": ["<a list of possible tags that you think the object could be>"],
+        "object_tag": "<the final tag that you think this object should be, considering all the information given>",
+    }
+
+    The captured images may be noisy and different views may capture different objects. In such a case, you will still return a single answer of the most common object in the images. 
+
+    The returned answer MUST be parseable by the json.loads() function in Python. 
+    """
+    
+    client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+    
+    user_message = [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{encode_numpy_image_to_base64(image)}"
+            }
+        }
+    for image in images]
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-2024-05-13",
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_message
+            },
+        ],
+        max_tokens=512,
+        response_format={ "type": "json_object" },
+    )
+
+    return response.choices[0].message.content
+
+
+def extract_node_captions_gpt(args):
+    '''
+    Generate tag and captions for object nodes in the scene graph using GPT-4V and GPT-4o. 
+    This function should complete both the old extraction and refinement steps. 
+    '''
+        
+    # Load the scene map
+    scene_map = MapObjectList()
+    load_scene_map(args, scene_map)
+    responses = []
+
+    for idx_obj, obj in tqdm(enumerate(scene_map), total=len(scene_map)):
+        conf = obj["conf"]
+        conf = np.array(conf)
+        idx_most_conf = np.argsort(conf)[::-1]
+
+        image_crop_list = []
+        mask_list = []  # New list for masks
+        
+        if len(idx_most_conf) < 2:
+            continue 
+        idx_most_conf = idx_most_conf[:args.max_detections_per_object]
+        
+        for idx_det in idx_most_conf:
+            # image = Image.open(correct_path).convert("RGB")
+            image = Image.open(obj["color_path"][idx_det]).convert("RGB")
+            xyxy = obj["xyxy"][idx_det]
+            class_id = obj["class_id"][idx_det]
+            # Retrieve and crop mask
+            mask = obj["mask"][idx_det]
+            
+            padding = 10
+            x1, y1, x2, y2 = xyxy
+            # image_crop = crop_image_pil(image, x1, y1, x2, y2, padding=padding)
+            image_crop, mask_crop = crop_image_and_mask(image, mask, x1, y1, x2, y2, padding=padding)
+            if args.masking_option == "blackout":
+                image_crop_modified = blackout_nonmasked_area(image_crop, mask_crop)
+            elif args.masking_option == "red_outline":
+                image_crop_modified = draw_red_outline(image_crop, mask_crop)
+            else:
+                image_crop_modified = image_crop  # No modification
+                
+            _w, _h = image_crop.size
+            if _w * _h < 70 * 70:
+                print("small object. Skipping this view...")
+                continue
+            
+            image_crop_list.append(image_crop_modified)
+            
+        response = caption_object_gpt4o(image_crop_list)
+        response_json = json.loads(response)
+        print(response_json)
+        responses.append(response_json)
+        
+    save_path = Path(args.cachedir) / "cfslam_gpt-4_responses.pkl"
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_path, "wb") as f:
+        pkl.dump(responses, f)
+
 
 def extract_node_captions(args):
     from conceptgraph.llava.llava_model import LLaVaChat
-
-    # NOTE: args.mapfile is in cfslam format
-    from conceptgraph.slam.slam_classes import MapObjectList
 
     # Load the scene map
     scene_map = MapObjectList()
@@ -394,7 +518,6 @@ def save_json_to_file(json_str, filename):
 
 def refine_node_captions(args):
     # NOTE: args.mapfile is in cfslam format
-    from conceptgraph.slam.slam_classes import MapObjectList
     from conceptgraph.scenegraph.GPTPrompt import GPTPrompt
 
     # Load the captions for each segment
@@ -528,7 +651,6 @@ def extract_object_tag_from_json_str(json_str):
 
 
 def build_scenegraph(args):
-    from conceptgraph.slam.slam_classes import MapObjectList
     from conceptgraph.slam.utils import compute_overlap_matrix
 
     # Load the scene map
@@ -730,7 +852,8 @@ def build_scenegraph(args):
                     start_time = time.time()
                     chat_completion = openai.ChatCompletion.create(
                         # model="gpt-3.5-turbo",
-                        model="gpt-4",
+                        # model="gpt-4",
+                        model="gpt-4o",
                         messages=[{"role": "user", "content": DEFAULT_PROMPT + "\n\n" + input_json_str}],
                         timeout=TIMEOUT,  # Timeout in seconds
                     )
@@ -788,9 +911,6 @@ def build_scenegraph(args):
 
 
 def generate_scenegraph_json(args):
-    from conceptgraph.slam.slam_classes import MapObjectList
-    
-
     # Generate the JSON file summarizing the scene, if it doesn't exist already
     # or if the --recopmute_scenegraph_json flag is set
     scene_desc = []
@@ -836,8 +956,6 @@ def display_images(image_list):
 
 
 def annotate_scenegraph(args):
-    from conceptgraph.slam.slam_classes import MapObjectList
-
     # Load the pruned scene map
     scene_map = MapObjectList()
     with gzip.open(Path(args.cachedir) / "map" / "scene_map_cfslam_pruned.pkl.gz", "rb") as f:
@@ -928,6 +1046,8 @@ def main():
         extract_node_captions(args)
     elif args.mode == "refine-node-captions":
         refine_node_captions(args)
+    elif args.mode == "extract-node-captions-gpt":
+        extract_node_captions_gpt(args)
     elif args.mode == "build-scenegraph":
         build_scenegraph(args)
     elif args.mode == "generate-scenegraph-json":
