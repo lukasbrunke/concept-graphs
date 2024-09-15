@@ -25,10 +25,25 @@
 
 ![Splash Figure](./assets/splash-final.png)
 
-### NOTE: Refactored code for easier setup and usage:
-We are in the process of refactoring the code to make ConceptGrphs easier to install and use. At some point in the coming months the current code will be depreceated in favour of the refactored code. At the moment, the refactored code lives on the `ali-dev` [branch](https://github.com/concept-graphs/concept-graphs/tree/ali-dev), and has this corresponding [readme file](https://github.com/concept-graphs/concept-graphs/blob/ali-dev/README.md). Some of the benefits include not needing to use groundedDINO, classes staying fixed throughout the mapping cycle, and automatic installation of models needed.
+# This branch
 
-If you'd like to try it out, simply switch to the `ali-dev` branch. and if you run into problems, please open an issue on the repo, we are actively maintaining it and will help you out.
+This branch implements the usage of [LLaVA 1.6](https://github.com/haotian-liu/LLaVA/tree/main) in the Scene Graph building stage. In the branch, by default, running `build_scenegraph_cfslam.py` with `--mode extract-node-captions` option will be using `liuhaotian/llava-v1.6-vicuna-7b`. This implementation is only for reference and has not been tested extensively. 
+
+For setup, instead of using the `conceptgraph` env from the main branch, I recommend creating a new conda env dedicated for the LLaVA codebase and running the above-mentioned command in that env (`llava` package requires installing many packages with specified versions, i.e. `==` signs in `pyproject.toml`. Be careful when you really want to merge envs). Please refer to [LLaVA 1.6](https://github.com/haotian-liu/LLaVA/tree/main) for setup. In addition, you may need the following install commands. 
+
+```bash
+pip install opencv-python
+pip install tyro
+pip install openai
+pip install open3d
+```
+
+# Updates
+
+* The codebase has been significantly refactored in the `ali-dev` [branch](https://github.com/concept-graphs/concept-graphs/tree/ali-dev), which provides a real-time, streamlined re-implementation that supports RGB-D video from iPhone and has a better visualization using [Rerun.io](https://rerun.io/). We also provide this [getting started video tutorial](https://youtu.be/56jEFyrqqpo?si=jo-qto5Gv8qxqEw2). Please check it out!
+* The code for real-world mapping and navigation using a Jackal robot is open-sourced [here](https://github.com/sachaMorin/concept_graphs_jackal).
+* The code for localization and mapping in AI2Thor is released in the codebase. See [here](https://github.com/concept-graphs/concept-graphs/tree/main?tab=readme-ov-file#ai2thor-related-experiments) for instructions.
+
 
 ## Setup
 
@@ -62,6 +77,7 @@ conda install pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 pytorch-cuda=
 conda install https://anaconda.org/pytorch3d/pytorch3d/0.7.4/download/linux-64/pytorch3d-0.7.4-py310_cu118_pyt201.tar.bz2
 
 # Install the gradslam package and its dependencies
+# Please clone and install them in separate folders, not within the concept-graphs folder. 
 git clone https://github.com/krrish94/chamferdist.git
 cd chamferdist
 pip install .
@@ -123,12 +139,12 @@ pip install -e .
 
 ### Set up LLaVA (used for scene graph generation)
 
-Follow the instructions on the [LLaVA repo](https://github.com/haotian-liu/LLaVA) to set it up. You also need to prepare the LLaVA checkpoints and save them to `$LLAVA_MODEL_PATH`. We have tested with model checkpoint `LLaVA-7B-v0` and [LLaVA code](https://github.com/haotian-liu/LLaVA) at this [commit](https://github.com/haotian-liu/LLaVA/commit/8fc54a09a6be74b2abd913c468fb3d42ae826194). LLaVA codebase at later commits may require some adaptations.
+Follow the instructions on the [LLaVA repo](https://github.com/haotian-liu/LLaVA) to set it up. You also need to prepare the LLaVA checkpoints and save them to `$LLAVA_CKPT_PATH`. We have tested with model checkpoint `LLaVA-7B-v0` and [LLaVA code](https://github.com/haotian-liu/LLaVA) at this [commit](https://github.com/haotian-liu/LLaVA/commit/8fc54a09a6be74b2abd913c468fb3d42ae826194). LLaVA codebase at later commits may require some adaptations.
 
 ```bash
 # Set the env variables as follows (change the paths accordingly)
 export LLAVA_PYTHON_PATH=/path/to/llava
-export LLAVA_MODEL_PATH=/path/to/LLaVA-7B-v0
+export LLAVA_CKPT_PATH=/path/to/LLaVA-7B-v0
 ```
 
 ## Prepare dataset (Replica as an example)

@@ -1,3 +1,5 @@
+notebooks
+README_private.md
 conceptgraph/outputs
 conceptgraph/scripts/wandb
 conceptgraph/results
@@ -7,6 +9,7 @@ manipulation/contact_graspnet/examples
 manipulation/contact_graspnet/test_data
 manipulation/contact_graspnet/checkpoints
 manipulation/dataset
+env_vars.bash
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
