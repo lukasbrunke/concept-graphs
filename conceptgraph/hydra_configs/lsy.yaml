@@ -1,0 +1,6 @@
+defaults:
+  - base_paths
+
+dataset_root: ${data_root}/sai
+scene_id: 202408131802_robot_clutter_grasping
+dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml

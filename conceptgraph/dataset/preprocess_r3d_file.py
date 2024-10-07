@@ -22,11 +22,14 @@ from pathlib import Path
 
 @dataclass
 class ProgramArgs:
-    datapath = "/home/kuwajerw/new_local_data/new_record3d/ali_apartment/co_store"
+    datapath = "/home/lukas/Projects/concept-data/record3D/2024-08-02--15-46-24_boxes_fan"
     output_dir = None  # Optional, set dynamically if not provided
 
-desired_width = 1440
-desired_height = 1920
+# desired_width = 1440
+# desired_height = 1920
+
+desired_width = 720
+desired_height = 960
 
 def load_depth(filepath):
     with open(filepath, 'rb') as depth_fh:
