@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 import pickle
 import gzip
+import pdb
 
 # Third-party imports
 import cv2
@@ -68,7 +69,7 @@ from conceptgraph.utils.vis import (
     save_video_detections
 )
 from conceptgraph.slam.slam_classes import MapEdgeMapping, MapObjectList
-from conceptgraph.slam.utils import (
+from conceptgraph.slam.utils_no_sampling import (
     filter_gobs,
     filter_objects,
     get_bounding_box,
@@ -117,6 +118,8 @@ def main(cfg : DictConfig):
                )
     cfg = process_cfg(cfg)
 
+    # print(cfg.end)
+
     # Initialize the dataset
     dataset = get_dataset(
         dataconfig=cfg.dataset_config,
@@ -131,6 +134,12 @@ def main(cfg : DictConfig):
         dtype=torch.float,
     )
     # cam_K = dataset.get_cam_K()
+
+    # # Load list of blurry images
+    # skipped_frames_path = Path(cfg.dataset_root) / cfg.scene_id / "skipped_frames.txt"
+    # with open(skipped_frames_path, "r") as f:
+    #     skipped_frames = f.read().splitlines()
+    # skipped_frames = [int(frame) for frame in skipped_frames]
 
     objects = MapObjectList(device=cfg.device)
     map_edges = MapEdgeMapping(objects)
@@ -171,8 +180,8 @@ def main(cfg : DictConfig):
 
         ## Initialize the detection models
         detection_model = measure_time(YOLO)('yolov8l-world.pt')
-        # sam_predictor = SAM('sam_l.pt') 
-        sam_predictor = SAM('mobile_sam.pt') # UltraLytics SAM
+        sam_predictor = SAM('sam_l.pt') 
+        # sam_predictor = SAM('mobile_sam.pt') # UltraLytics SAM
         # sam_predictor = measure_time(get_sam_predictor)(cfg) # Normal SAM
         clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
             "ViT-H-14", "laion2b_s32b_b79k"
@@ -198,6 +207,10 @@ def main(cfg : DictConfig):
     exit_early_flag = False
     counter = 0
     for frame_idx in trange(len(dataset)):
+        # if counter + 1 in skipped_frames:
+        #     print(f"Skipping frame {frame_idx} as it is blurry")
+        #     counter+=1
+        #     continue
         tracker.curr_frame_idx = frame_idx
         counter+=1
         orr.set_time_sequence("frame", frame_idx)
@@ -316,6 +329,7 @@ def main(cfg : DictConfig):
                 depth_image_rgb = cv2.normalize(depth_array, None, 0, 255, cv2.NORM_MINMAX)
                 depth_image_rgb = depth_image_rgb.astype(np.uint8)
                 depth_image_rgb = cv2.cvtColor(depth_image_rgb, cv2.COLOR_GRAY2BGR)
+
                 annotated_depth_image, labels = vis_result_fast_on_depth(depth_image_rgb, curr_det, obj_classes.get_classes_arr())
                 cv2.imwrite(str(vis_save_path).replace(".jpg", "_depth.jpg"), annotated_depth_image)
                 cv2.imwrite(str(vis_save_path).replace(".jpg", "_depth_only.jpg"), depth_image_rgb)
@@ -329,6 +343,8 @@ def main(cfg : DictConfig):
             else:
                 # if no detections, throw an error
                 raise FileNotFoundError(f"No detections found for frame {frame_idx}at paths \n{det_exp_pkl_path / color_path.stem} or \n{det_exp_pkl_path / f'{int(color_path.stem):06}'}.")
+
+        # pdb.set_trace()
 
         # get pose, this is the untrasformed pose.
         unt_pose = dataset.poses[frame_idx]
@@ -372,19 +388,20 @@ def main(cfg : DictConfig):
             trans_pose=adjusted_pose,
             min_points_threshold=cfg.min_points_threshold,
             spatial_sim_type=cfg.spatial_sim_type,
-            obj_pcd_max_points=cfg.obj_pcd_max_points,
+            obj_pcd_max_points=-1,
             device=cfg.device,
         )
 
         for obj in obj_pcds_and_bboxes:
             if obj:
-                obj["pcd"] = init_process_pcd(
-                    pcd=obj["pcd"],
-                    downsample_voxel_size=cfg["downsample_voxel_size"],
-                    dbscan_remove_noise=cfg["dbscan_remove_noise"],
-                    dbscan_eps=cfg["dbscan_eps"],
-                    dbscan_min_points=cfg["dbscan_min_points"],
-                )
+                # obj["pcd"] = init_process_pcd(
+                #     pcd=obj["pcd"],
+                #     downsample_voxel_size=cfg["downsample_voxel_size"],
+                #     dbscan_remove_noise=cfg["dbscan_remove_noise"],
+                #     dbscan_eps=cfg["dbscan_eps"],
+                #     dbscan_min_points=cfg["dbscan_min_points"],
+                #     run_dbscan=False,
+                # )
                 obj["bbox"] = get_bounding_box(
                     spatial_sim_type=cfg['spatial_sim_type'], 
                     pcd=obj["pcd"],
@@ -408,6 +425,8 @@ def main(cfg : DictConfig):
                     "objects_this_frame": len(detection_list),
                 })
             continue 
+
+        # pdb.set_trace()
 
         ### compute similarities and then merge
         spatial_sim = compute_spatial_similarities(
